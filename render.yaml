@@ -1,0 +1,23 @@
+services:
+  # Master Service - Runs everything from single file
+  - type: web
+    name: python-script-master
+    env: python
+    pythonVersion: "3.10"
+    buildCommand: |
+      pip install -r requirements.txt
+      mkdir -p scripts data/logs static/css static/js templates
+    startCommand: python master.py
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    plan: free
+    healthCheckPath: /master
+    autoDeploy: true
+    ports:
+      - port: 10000
+        http: true
+      - port: 10001-10100
+        http: true
