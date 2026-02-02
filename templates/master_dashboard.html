@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Master Dashboard - Python Script Host</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>Python Script Hosting Dashboard</h1>
+            <div class="user-info">
+                <span>Welcome, {{ username }}</span>
+                <a href="/logout" class="btn-logout">Logout</a>
+            </div>
+        </header>
+
+        <!-- System Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>System CPU</h3>
+                <div class="stat-value" id="cpu-percent">0%</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="cpu-bar"></div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <h3>Memory Usage</h3>
+                <div class="stat-value" id="memory-percent">0%</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="memory-bar"></div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <h3>Active Scripts</h3>
+                <div class="stat-value" id="active-scripts">0/3</div>
+            </div>
+            <div class="stat-card">
+                <h3>Uptime</h3>
+                <div class="stat-value" id="uptime">00:00:00</div>
+            </div>
+        </div>
+
+        <!-- Scripts Grid -->
+        <h2>Script Management</h2>
+        <div class="scripts-grid">
+            {% for script_id, script in scripts.items() %}
+            <div class="script-card" id="script-{{ script_id }}">
+                <div class="script-header">
+                    <h3>{{ script.name }}</h3>
+                    <span class="status-badge" id="status-{{ script_id }}">{{ script.status }}</span>
+                </div>
+                
+                <div class="script-description">
+                    {{ script.description }}
+                </div>
+                
+                <div class="script-info">
+                    <div>Port: <strong>{{ script.port }}</strong></div>
+                    <div>PID: <span id="pid-{{ script_id }}">{{ script.pid or 'N/A' }}</span></div>
+                    <div>Last Start: <span id="last-start-{{ script_id }}">{{ script.last_start or 'Never' }}</span></div>
+                </div>
+                
+                <div class="script-controls">
+                    <button class="btn-start" onclick="startScript('{{ script_id }}')" id="btn-start-{{ script_id }}">
+                        Start Script
+                    </button>
+                    <button class="btn-stop" onclick="stopScript('{{ script_id }}')" id="btn-stop-{{ script_id }}" disabled>
+                        Stop Script
+                    </button>
+                    <a href="http://localhost:{{ script.port }}" target="_blank" class="btn-dashboard" id="btn-dash-{{ script_id }}">
+                        Open Dashboard
+                    </a>
+                </div>
+                
+                <div class="script-resources">
+                    <small>CPU: <span id="cpu-{{ script_id }}">0%</span> | 
+                    Memory: <span id="mem-{{ script_id }}">0 MB</span></small>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Global Logs -->
+        <h2>Global Logs</h2>
+        <div class="logs-container">
+            <pre id="global-logs"></pre>
+            <button class="btn-clear" onclick="clearLogs()">Clear Logs</button>
+        </div>
+    </div>
+
+    <script>
+        let socket = io();
+        let startTime = Date.now();
+        
+        // Update uptime
+        function updateUptime() {
+            let uptime = Date.now() - startTime;
+            let hours = Math.floor(uptime / (1000 * 60 * 60));
+            let minutes = Math.floor((uptime % (1000 * 60 * 60)) / (1000 * 60));
+            let seconds = Math.floor((uptime % (1000 * 60)) / 1000);
+            
+            document.getElementById('uptime').textContent = 
+                `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        
+        // Fetch system stats
+        async function fetchSystemStats() {
+            try {
+                const response = await fetch('/api/system_stats');
+                const data = await response.json();
+                
+                // Update CPU
+                const cpuPercent = Math.round(data.cpu);
+                document.getElementById('cpu-percent').textContent = cpuPercent + '%';
+                document.getElementById('cpu-bar').style.width = cpuPercent + '%';
+                
+                // Update Memory
+                const memPercent = Math.round(data.memory.percent);
+                document.getElementById('memory-percent').textContent = memPercent + '%';
+                document.getElementById('memory-bar').style.width = memPercent + '%';
+                
+                // Update progress bar colors
+                document.getElementById('cpu-bar').style.backgroundColor = 
+                    cpuPercent > 80 ? '#ef4444' : cpuPercent > 60 ? '#f59e0b' : '#10b981';
+                
+                document.getElementById('memory-bar').style.backgroundColor = 
+                    memPercent > 80 ? '#ef4444' : memPercent > 60 ? '#f59e0b' : '#10b981';
+                    
+            } catch (error) {
+                console.error('Error fetching system stats:', error);
+            }
+        }
+        
+        // Update script status from socket
+        socket.on('scripts_update', function(data) {
+            let activeCount = 0;
+            
+            for (const scriptId in data) {
+                const script = data[scriptId];
+                const card = document.getElementById(`script-${scriptId}`);
+                
+                // Update status badge
+                const statusBadge = document.getElementById(`status-${scriptId}`);
+                statusBadge.textContent = script.status;
+                statusBadge.className = `status-badge status-${script.status}`;
+                
+                // Update PID
+                document.getElementById(`pid-${scriptId}`).textContent = 
+                    script.pid || 'N/A';
+                
+                // Update controls
+                const startBtn = document.getElementById(`btn-start-${scriptId}`);
+                const stopBtn = document.getElementById(`btn-stop-${scriptId}`);
+                const dashBtn = document.getElementById(`btn-dash-${scriptId}`);
+                
+                if (script.status === 'running') {
+                    activeCount++;
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    dashBtn.style.display = 'inline-block';
+                } else {
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    dashBtn.style.display = 'inline-block';
+                }
+                
+                // Update last start time
+                if (script.last_start) {
+                    const date = new Date(script.last_start);
+                    document.getElementById(`last-start-${scriptId}`).textContent = 
+                        date.toLocaleTimeString();
+                }
+            }
+            
+            // Update active scripts count
+            document.getElementById('active-scripts').textContent = 
+                `${activeCount}/3`;
+        });
+        
+        // Start script function
+        async function startScript(scriptId) {
+            try {
+                const response = await fetch(`/api/start_script/${scriptId}`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    addLog(`Starting ${scriptId}: ${result.message}`);
+                } else {
+                    addLog(`Error starting ${scriptId}: ${result.error}`);
+                }
+            } catch (error) {
+                addLog(`Error: ${error}`);
+            }
+        }
+        
+        // Stop script function
+        async function stopScript(scriptId) {
+            try {
+                const response = await fetch(`/api/stop_script/${scriptId}`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    addLog(`Stopped ${scriptId}: ${result.message}`);
+                }
+            } catch (error) {
+                addLog(`Error stopping ${scriptId}: ${error}`);
+            }
+        }
+        
+        // Add log to global logs
+        function addLog(message) {
+            const logs = document.getElementById('global-logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.textContent += `[${timestamp}] ${message}\n`;
+            logs.scrollTop = logs.scrollHeight;
+        }
+        
+        // Clear logs
+        function clearLogs() {
+            document.getElementById('global-logs').textContent = '';
+        }
+        
+        // Request updates from server
+        socket.on('connect', function() {
+            socket.emit('request_update');
+            setInterval(() => socket.emit('request_update'), 2000);
+        });
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initial data fetch
+            fetch('/api/scripts')
+                .then(res => res.json())
+                .then(data => {
+                    socket.emit('scripts_update', data);
+                });
+            
+            // Set up intervals
+            setInterval(fetchSystemStats, 2000);
+            setInterval(updateUptime, 1000);
+            
+            // Fetch logs for each script periodically
+            setInterval(async () => {
+                for (const scriptId of ['script1', 'script2', 'script3']) {
+                    try {
+                        const response = await fetch(`/api/script_logs/${scriptId}`);
+                        const data = await response.json();
+                        if (data.logs && data.logs.length > 0) {
+                            const lastLog = data.logs[data.logs.length - 1];
+                            if (!lastLog.includes('Heartbeat')) {
+                                // addLog(`${scriptId}: ${lastLog.trim()}`);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Error fetching logs:', error);
+                    }
+                }
+            }, 5000);
+        });
+    </script>
+</body>
+</html>
